@@ -1,18 +1,15 @@
 import { Router } from 'express';
 import express from "express";
-import { Lib } from '../lib.js';
+import { Lib } from '../lib/lib.js';
+import { LibAwsBedRock } from '../lib/lib-aws.js';
 import { Config } from '../../config/appconfig.js';
-import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 
 export class GetMoodRouter {
 	public router: Router;
     private lib: Lib;
     private config: Config;
-    private bedrockClient: BedrockRuntimeClient;
-	private command: ConverseCommand;
 	private app: express.Application;
-    private region: string;
-    private modelId: string;
+    private libAwsBedRock: LibAwsBedRock;
 
     constructor() {
         this.router = Router();
@@ -20,22 +17,8 @@ export class GetMoodRouter {
         this.config = new Config();
 		this.app = express();
 		this.app.use(express.json());
+        this.libAwsBedRock = new LibAwsBedRock();
 
-		this.region = this.config.aws.region as string;
-		this.modelId = this.config.aws.modelId as string;
-
-        this.bedrockClient = new BedrockRuntimeClient({
-            region: this.region,
-			credentials: {
-            accessKeyId: this.config.aws.accessKeyId as string,
-            secretAccessKey: this.config.aws.secretAccessKey as string
-        },
-        });
-
-		this.command = new ConverseCommand({
-			modelId: this.config.aws.modelId as string,
-			messages: [],
-		});
 
 		// ルート呼び出し
 		this.setRoutes();
@@ -67,40 +50,35 @@ export class GetMoodRouter {
 	 * @param res レスポンスオブジェクト
 	 */
 	private async getMood(message: string, res: express.Response) {
-		const baseText = "以下の文章の感情を、喜び、悲しみ、怒り、恐れ、驚き、嫌悪の6つから分類してください。回答は感情名だけを返してください。";
-		const messageWithBaseText = `${baseText}\n\n文章: ${message}`;
-		const command = new ConverseCommand({
-			modelId: this.modelId,
-			messages: [
-			{
-				role: "user",
-				content: [
-				{
-					text: messageWithBaseText,
-				},
-				],
-			},
-			],
-		});
+		const system = 
+		`
+		受信したメッセージを、以下の6種類の感情のいずれか1つに分類してください。
+
+		- fan
+		- sad
+		- angry
+		- fear
+		- surprise
+		- disgust
+
+		また、文章から感情の強さを推測し、0〜10の整数で表してください。
+
+		以下のJSON形式のみを返してください。
+		説明文、Markdown、コードブロック、その他の文字列は一切不要です。
+
+		{
+		"mindKind": "fan",
+		"intensity": 8
+		}
+		`;
+		
 		try {
-			const response = await this.bedrockClient.send(command);
+			const response = await this.libAwsBedRock.converseCommand("user", message, system);
+			const resultJson = this.lib.removeJsonCodeBlock(response);
+			const result:string = JSON.parse(resultJson);
+			console.log(result);
 
-			const text = response.output?.message?.content
-				?.find(content => content.text !== undefined)
-				?.text
-				?.trim();
-
-			if (!text) {
-				res.status(502).json({
-					message: "Bedrockから回答テキストを取得できませんでした",
-				});
-				return;
-			}
-
-			res.status(200).json({
-				text,
-				id: 1,
-			});
+			res.status(200).json(result);
 		} catch (error) {
 			console.error(error);
 			res.status(500).json({ レスポンス: 'Internal Server Error' });
